@@ -40,40 +40,40 @@ export function DataProvider({ children }) {
   }, [observations, forecasts]);
 
   const importObservations = useCallback((data) => {
-    const validated = validateObservationData(data);
-    if (validated.length > 0) {
-      setObservations(validated);
+    const result = validateObservationData(data);
+    if (result.valid.length > 0) {
+      setObservations(result.valid);
       setDataSource('imported');
       setImportInfo(prev => ({
         ...prev,
         observations: {
-          count: validated.length,
-          dateRange: getDateRange(validated),
-          stations: [...new Set(validated.map(d => d.stationId))].length
+          count: result.valid.length,
+          dateRange: getDateRange(result.valid),
+          stations: [...new Set(result.valid.map(d => d.stationId))].length
         }
       }));
-      return validated.length;
+      return result;
     }
-    return 0;
+    return result;
   }, []);
 
   const importForecasts = useCallback((data) => {
-    const validated = validateForecastData(data);
-    if (validated.length > 0) {
-      setForecasts(validated);
+    const result = validateForecastData(data);
+    if (result.valid.length > 0) {
+      setForecasts(result.valid);
       setDataSource('imported');
       setImportInfo(prev => ({
         ...prev,
         forecasts: {
-          count: validated.length,
-          dateRange: getDateRange(validated),
-          stations: [...new Set(validated.map(d => d.stationId))].length,
-          models: [...new Set(validated.map(d => d.model))].length
+          count: result.valid.length,
+          dateRange: getDateRange(result.valid),
+          stations: [...new Set(result.valid.map(d => d.stationId))].length,
+          models: [...new Set(result.valid.map(d => d.model))].length
         }
       }));
-      return validated.length;
+      return result;
     }
-    return 0;
+    return result;
   }, []);
 
   const resetToMockData = useCallback(() => {
@@ -113,59 +113,156 @@ export function useData() {
   return context;
 }
 
+function normalizeFieldName(key) {
+  if (!key) return key;
+  return key
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s-]/g, '')
+    .replace(/\./g, '');
+}
+
+function getFieldValue(item, candidates) {
+  for (const key of Object.keys(item)) {
+    const normalized = normalizeFieldName(key);
+    if (candidates.map(c => normalizeFieldName(c)).includes(normalized)) {
+      return item[key];
+    }
+  }
+  return undefined;
+}
+
+const OBS_FIELDS = {
+  stationId: ['stationId', 'station_id', 'stationid', 'station', '站号', '站点编号'],
+  stationName: ['stationName', 'station_name', 'stationname', '站点名称', '站名'],
+  date: ['date', '日期', '观测日期', '时间', 'time'],
+  temperature: ['temperature', 'temp', '气温', '温度', 't2m', 'T'],
+  precipitation: ['precipitation', 'precip', 'precipitation_amount', 'prate', '降水', '降水量', 'rain', '降雨量'],
+  windSpeed: ['windSpeed', 'wind_speed', 'windspeed', 'wind', '风速', '风力', 'ws', 'u10'],
+  weatherType: ['weatherType', 'weather_type', 'weather', '天气类型', '天气状况', '天气现象']
+};
+
+const FC_FIELDS = {
+  stationId: ['stationId', 'station_id', 'stationid', 'station', '站号', '站点编号'],
+  stationName: ['stationName', 'station_name', 'stationname', '站点名称', '站名'],
+  date: ['date', 'initDate', 'init_time', '起报日期', '起报时间', '初始时间', 'baseTime'],
+  model: ['model', 'mode', '模式', '预报模式', 'modelName', 'model_name'],
+  forecastHour: ['forecastHour', 'forecast_hour', 'forecasthour', 'fhour', 'fh', '时效', '预报时效', 'leadTime', 'lead_time'],
+  forecastDate: ['forecastDate', 'forecast_date', 'forecastdate', 'validDate', 'valid_date', '预报日期', '预报时间'],
+  temperature: ['temperature', 'temp', '气温', '温度', 't2m', 'T'],
+  precipitation: ['precipitation', 'precip', 'precipitation_amount', 'prate', '降水', '降水量', 'rain', '降雨量'],
+  windSpeed: ['windSpeed', 'wind_speed', 'windspeed', 'wind', '风速', '风力', 'ws', 'u10'],
+  weatherType: ['weatherType', 'weather_type', 'weather', '天气类型', '天气状况', '天气现象']
+};
+
 function validateObservationData(data) {
-  if (!Array.isArray(data) || data.length === 0) return [];
+  if (!Array.isArray(data) || data.length === 0) {
+    return { valid: [], invalid: 0, total: 0, errors: ['数据为空或格式不正确'] };
+  }
   
   const valid = [];
+  const invalid = [];
   const stationMap = new Map(STATIONS.map(s => [s.id, s]));
+  const errors = new Set();
   
-  data.forEach(item => {
-    if (!item.stationId || !item.date) return;
+  data.forEach((item, idx) => {
+    const stationId = getFieldValue(item, OBS_FIELDS.stationId);
+    const date = getFieldValue(item, OBS_FIELDS.date);
     
-    const station = stationMap.get(item.stationId);
+    if (!stationId || !date) {
+      invalid.push({ row: idx + 2, reason: `缺少必填字段: ${!stationId ? 'stationId' : ''}${!stationId && !date ? '、' : ''}${!date ? 'date' : ''}` });
+      if (!stationId) errors.add('stationId');
+      if (!date) errors.add('date');
+      return;
+    }
+    
+    const station = stationMap.get(stationId);
+    const stationName = getFieldValue(item, OBS_FIELDS.stationName);
+    const temperature = parseFloat(getFieldValue(item, OBS_FIELDS.temperature)) || 0;
+    const precipitation = parseFloat(getFieldValue(item, OBS_FIELDS.precipitation)) || 0;
+    const windSpeed = parseFloat(getFieldValue(item, OBS_FIELDS.windSpeed)) || 0;
+    const weatherType = getFieldValue(item, OBS_FIELDS.weatherType) || 'sunny';
     
     valid.push({
-      date: dayjs(item.date).format('YYYY-MM-DD'),
-      stationId: item.stationId,
-      stationName: station?.name || item.stationName || item.stationId,
-      temperature: parseFloat(item.temperature) || 0,
-      precipitation: parseFloat(item.precipitation) || 0,
-      windSpeed: parseFloat(item.windSpeed) || 0,
-      weatherType: item.weatherType || 'sunny',
-      season: getSeasonFromDateStr(item.date)
+      date: dayjs(date).format('YYYY-MM-DD'),
+      stationId,
+      stationName: station?.name || stationName || stationId,
+      temperature,
+      precipitation,
+      windSpeed,
+      weatherType,
+      season: getSeasonFromDateStr(date)
     });
   });
   
-  return valid;
+  return {
+    valid,
+    invalid: invalid.length,
+    total: data.length,
+    invalidRecords: invalid.slice(0, 20),
+    errors: Array.from(errors)
+  };
 }
 
 function validateForecastData(data) {
-  if (!Array.isArray(data) || data.length === 0) return [];
+  if (!Array.isArray(data) || data.length === 0) {
+    return { valid: [], invalid: 0, total: 0, errors: ['数据为空或格式不正确'] };
+  }
   
   const valid = [];
+  const invalid = [];
   const stationMap = new Map(STATIONS.map(s => [s.id, s]));
+  const errors = new Set();
   
-  data.forEach(item => {
-    if (!item.stationId || !item.date || !item.model || !item.forecastHour) return;
+  data.forEach((item, idx) => {
+    const stationId = getFieldValue(item, FC_FIELDS.stationId);
+    const date = getFieldValue(item, FC_FIELDS.date);
+    const model = getFieldValue(item, FC_FIELDS.model);
+    const forecastHourRaw = getFieldValue(item, FC_FIELDS.forecastHour);
+    const forecastHour = parseInt(forecastHourRaw);
     
-    const station = stationMap.get(item.stationId);
+    const missing = [];
+    if (!stationId) missing.push('stationId');
+    if (!date) missing.push('date');
+    if (!model) missing.push('model');
+    if (forecastHourRaw === undefined || forecastHourRaw === null || forecastHourRaw === '' || isNaN(forecastHour)) missing.push('forecastHour');
+    
+    if (missing.length > 0) {
+      invalid.push({ row: idx + 2, reason: `缺少必填字段: ${missing.join('、')}` });
+      missing.forEach(m => errors.add(m));
+      return;
+    }
+    
+    const station = stationMap.get(stationId);
+    const stationName = getFieldValue(item, FC_FIELDS.stationName);
+    const forecastDate = getFieldValue(item, FC_FIELDS.forecastDate) || dayjs(date).add(forecastHour, 'hour').format('YYYY-MM-DD HH:mm');
+    const temperature = parseFloat(getFieldValue(item, FC_FIELDS.temperature)) || 0;
+    const precipitation = parseFloat(getFieldValue(item, FC_FIELDS.precipitation)) || 0;
+    const windSpeed = parseFloat(getFieldValue(item, FC_FIELDS.windSpeed)) || 0;
+    const weatherType = getFieldValue(item, FC_FIELDS.weatherType) || 'sunny';
     
     valid.push({
-      date: dayjs(item.date).format('YYYY-MM-DD'),
-      stationId: item.stationId,
-      stationName: station?.name || item.stationName || item.stationId,
-      model: item.model,
-      forecastHour: parseInt(item.forecastHour),
-      forecastDate: item.forecastDate || dayjs(item.date).add(parseInt(item.forecastHour), 'hour').format('YYYY-MM-DD HH:mm'),
-      temperature: parseFloat(item.temperature) || 0,
-      precipitation: parseFloat(item.precipitation) || 0,
-      windSpeed: parseFloat(item.windSpeed) || 0,
-      season: getSeasonFromDateStr(item.date),
-      weatherType: item.weatherType || 'sunny'
+      date: dayjs(date).format('YYYY-MM-DD'),
+      stationId,
+      stationName: station?.name || stationName || stationId,
+      model,
+      forecastHour,
+      forecastDate,
+      temperature,
+      precipitation,
+      windSpeed,
+      season: getSeasonFromDateStr(date),
+      weatherType
     });
   });
   
-  return valid;
+  return {
+    valid,
+    invalid: invalid.length,
+    total: data.length,
+    invalidRecords: invalid.slice(0, 20),
+    errors: Array.from(errors)
+  };
 }
 
 function getSeasonFromDateStr(dateStr) {
