@@ -1,0 +1,40 @@
+.main-layout {
+  min-height: 100vh;
+}
+
+.main-sider {
+  box-shadow: 2px 0 6px rgba(0, 21, 41, 0.1);
+}
+
+.logo {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 16px;
+  font-weight: bold;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 16px;
+  border-radius: 4px;
+}
+
+.header-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #666;
+  font-size: 14px;
+}
+
+.header-info .divider {
+  color: #ddd;
+}
+
+.ant-layout-sider {
+  background: #001529 !important;
+}
+
+.ant-menu-dark {
+  background: #001529 !important;
+}
