@@ -6,7 +6,7 @@ function seededRandom(seed) {
   return x - Math.floor(x);
 }
 
-function getSeason(date) {
+export function getSeasonFromDate(date) {
   const month = date.month() + 1;
   if (month >= 3 && month <= 5) return 'spring';
   if (month >= 6 && month <= 8) return 'summer';
@@ -23,7 +23,7 @@ function getWeatherType(seed, season) {
 
 function generateObservationData(date, station) {
   const seed = Date.parse(date.format('YYYY-MM-DD')) + station.lat * 1000 + station.lon * 100;
-  const season = getSeason(date);
+  const season = getSeasonFromDate(date);
   
   const baseTemp = {
     spring: 15,
@@ -42,6 +42,7 @@ function generateObservationData(date, station) {
   return {
     date: date.format('YYYY-MM-DD'),
     stationId: station.id,
+    stationName: station.name,
     temperature: Math.round(temperature * 10) / 10,
     precipitation: Math.round(precipitation * 10) / 10,
     windSpeed: Math.round(windSpeed * 10) / 10,
@@ -50,44 +51,95 @@ function generateObservationData(date, station) {
   };
 }
 
+const MODEL_PROFILES = {
+  ECMWF: {
+    tempBias: 0.2,
+    tempGrowth: 0.008,
+    tempVar: 0.8,
+    precipBias: -1.5,
+    precipGrowth: 0.012,
+    precipVar: 2.5,
+    windBias: 0.4,
+    windGrowth: 0.006,
+    windVar: 0.6,
+    qualityRank: 1
+  },
+  GFS: {
+    tempBias: -0.6,
+    tempGrowth: 0.012,
+    tempVar: 1.0,
+    precipBias: 1.2,
+    precipGrowth: 0.018,
+    precipVar: 3.5,
+    windBias: -0.5,
+    windGrowth: 0.009,
+    windVar: 0.8,
+    qualityRank: 2
+  },
+  CMA: {
+    tempBias: 1.0,
+    tempGrowth: 0.018,
+    tempVar: 1.5,
+    precipBias: -3.0,
+    precipGrowth: 0.025,
+    precipVar: 5.0,
+    windBias: 0.8,
+    windGrowth: 0.014,
+    windVar: 1.2,
+    qualityRank: 3
+  },
+  WRF: {
+    tempBias: -0.3,
+    tempGrowth: 0.022,
+    tempVar: 1.8,
+    precipBias: 2.5,
+    precipGrowth: 0.03,
+    precipVar: 6.0,
+    windBias: 1.2,
+    windGrowth: 0.018,
+    windVar: 1.5,
+    qualityRank: 4
+  }
+};
+
 function generateForecastData(date, station, model, forecastHour) {
   const seed = Date.parse(date.format('YYYY-MM-DD')) + station.lat * 1000 + station.lon * 100 + 
-               model.id.charCodeAt(0) * 10 + forecastHour;
-  const season = getSeason(date);
+               model.id.charCodeAt(0) * 17 + forecastHour * 3;
+  const season = getSeasonFromDate(date);
   
   const obs = generateObservationData(date, station);
+  const profile = MODEL_PROFILES[model.id] || MODEL_PROFILES.ECMWF;
   
-  const modelBiases = {
-    ECMWF: { temp: 0.3, precip: -2, wind: 0.5 },
-    GFS: { temp: -0.5, precip: 1.5, wind: -0.3 },
-    CMA: { temp: 0.8, precip: -1, wind: 0.2 },
-    WRF: { temp: -0.2, precip: 2, wind: 0.8 }
-  };
+  const hourFactor = forecastHour / 24;
   
-  const hourFactor = forecastHour / 240;
-  const bias = modelBiases[model.id] || { temp: 0, precip: 0, wind: 0 };
+  const tempError = profile.tempBias + profile.tempGrowth * hourFactor * 24 + 
+                    (seededRandom(seed) - 0.5) * 2 * profile.tempVar * (1 + hourFactor * 0.5);
   
-  const tempError = bias.temp + hourFactor * 3 + seededRandom(seed) * 2 - 1;
-  const precipError = bias.precip * hourFactor + seededRandom(seed * 2) * 5 - 2.5;
-  const windError = bias.wind + hourFactor * 2 + seededRandom(seed * 3) * 1.5 - 0.75;
+  const precipError = profile.precipBias * (0.5 + hourFactor * 0.5) + 
+                      (seededRandom(seed * 2) - 0.5) * 2 * profile.precipVar * (1 + hourFactor * 0.3);
   
-  const regionalFactor = station.lon > 115 ? 0.2 : -0.1;
+  const windError = profile.windBias + profile.windGrowth * hourFactor * 24 + 
+                    (seededRandom(seed * 3) - 0.5) * 2 * profile.windVar * (1 + hourFactor * 0.4);
+  
+  const seasonalModifier = season === 'summer' ? 1.2 : season === 'winter' ? 0.8 : 1.0;
+  const regionalFactor = station.lon > 115 ? 0.3 : station.lat > 35 ? -0.2 : 0.1;
   
   return {
     date: date.format('YYYY-MM-DD'),
     stationId: station.id,
+    stationName: station.name,
     model: model.id,
     forecastHour,
     forecastDate: date.add(forecastHour, 'hour').format('YYYY-MM-DD HH:mm'),
-    temperature: Math.round((obs.temperature + tempError + regionalFactor) * 10) / 10,
-    precipitation: Math.max(0, Math.round((obs.precipitation + precipError) * 10) / 10),
-    windSpeed: Math.max(0, Math.round((obs.windSpeed + windError) * 10) / 10),
+    temperature: Math.round((obs.temperature + tempError * seasonalModifier + regionalFactor) * 10) / 10,
+    precipitation: Math.max(0, Math.round((obs.precipitation + precipError * seasonalModifier) * 10) / 10),
+    windSpeed: Math.max(0, Math.round((obs.windSpeed + windError * seasonalModifier) * 10) / 10),
     season,
     weatherType: obs.weatherType
   };
 }
 
-export function generateAllObservations(startDate, days) {
+export function generateObservations(startDate, days) {
   const data = [];
   const start = dayjs(startDate);
   
@@ -101,7 +153,7 @@ export function generateAllObservations(startDate, days) {
   return data;
 }
 
-export function generateAllForecasts(startDate, days) {
+export function generateForecasts(startDate, days) {
   const data = [];
   const start = dayjs(startDate);
   
@@ -119,30 +171,132 @@ export function generateAllForecasts(startDate, days) {
   return data;
 }
 
-export function getMonthlyArchiveData(year, month) {
-  const startDate = dayjs(`${year}-${month}-01`);
-  const days = startDate.daysInMonth();
+export function generateYearlyData(year) {
+  const startDate = dayjs(`${year}-01-01`);
+  const days = dayjs(`${year}-12-31`).diff(startDate, 'day') + 1;
   return {
-    observations: generateAllObservations(startDate, days),
-    forecasts: generateAllForecasts(startDate, Math.floor(days / 2))
+    observations: generateObservations(startDate, days),
+    forecasts: generateForecasts(startDate, days)
   };
 }
 
-export function getQuarterlyReportData(year, quarter) {
-  const startMonth = (quarter - 1) * 3 + 1;
-  const months = [startMonth, startMonth + 1, startMonth + 2];
-  const data = [];
+export function filterDataByDateRange(data, startDate, endDate) {
+  if (!startDate && !endDate) return data;
+  const start = startDate ? dayjs(startDate).format('YYYY-MM-DD') : null;
+  const end = endDate ? dayjs(endDate).format('YYYY-MM-DD') : null;
   
-  months.forEach(month => {
-    const monthData = getMonthlyArchiveData(year, month);
-    data.push({
-      month,
-      ...monthData
-    });
+  return data.filter(item => {
+    const itemDate = item.date;
+    if (start && itemDate < start) return false;
+    if (end && itemDate > end) return false;
+    return true;
   });
-  
-  return data;
 }
 
-export const mockObservations = generateAllObservations(dayjs().subtract(30, 'day'), 30);
-export const mockForecasts = generateAllForecasts(dayjs().subtract(30, 'day'), 30);
+export function filterDataByMonth(data, year, month) {
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+  return data.filter(item => item.date.startsWith(monthStr));
+}
+
+export function filterDataByQuarter(data, year, quarter) {
+  const startMonth = (quarter - 1) * 3 + 1;
+  const endMonth = startMonth + 2;
+  const startStr = `${year}-${String(startMonth).padStart(2, '0')}`;
+  const endStr = `${year}-${String(endMonth).padStart(2, '0')}-99`;
+  
+  return data.filter(item => {
+    const dateStr = item.date;
+    return dateStr >= startStr && dateStr <= endStr;
+  });
+}
+
+export function groupByMonth(observations, forecasts, element = 'temperature') {
+  const monthlyData = [];
+  
+  for (let month = 1; month <= 12; month++) {
+    const monthObs = filterDataByMonth(observations, dayjs().year(), month);
+    const monthFc = filterDataByMonth(forecasts, dayjs().year(), month);
+    
+    const byModel = {};
+    MODELS.forEach(model => {
+      const modelFc = monthFc.filter(f => f.model === model.id);
+      const errors = calculateErrorsSimple(modelFc, monthObs, element);
+      const stats = calculateStatsSimple(errors);
+      byModel[model.id] = stats;
+    });
+    
+    monthlyData.push({
+      month,
+      monthName: `${month}月`,
+      observationCount: monthObs.length,
+      forecastCount: monthFc.length,
+      byModel
+    });
+  }
+  
+  return monthlyData;
+}
+
+function calculateErrorsSimple(forecasts, observations, element) {
+  const obsMap = new Map();
+  observations.forEach(obs => {
+    const key = `${obs.stationId}_${obs.date}`;
+    obsMap.set(key, obs);
+  });
+  
+  const errors = [];
+  forecasts.forEach(fc => {
+    const fcDate = fc.forecastDate.split(' ')[0];
+    const key = `${fc.stationId}_${fcDate}`;
+    const obs = obsMap.get(key);
+    
+    if (obs && obs[element] !== undefined && fc[element] !== undefined) {
+      const error = fc[element] - obs[element];
+      errors.push({
+        error,
+        absError: Math.abs(error),
+        squaredError: error * error
+      });
+    }
+  });
+  
+  return errors;
+}
+
+function calculateStatsSimple(errors) {
+  if (errors.length === 0) {
+    return { count: 0, me: 0, mae: 0, rmse: 0 };
+  }
+  
+  const me = errors.reduce((sum, e) => sum + e.error, 0) / errors.length;
+  const mae = errors.reduce((sum, e) => sum + e.absError, 0) / errors.length;
+  const mse = errors.reduce((sum, e) => sum + e.squaredError, 0) / errors.length;
+  const rmse = Math.sqrt(mse);
+  
+  return {
+    count: errors.length,
+    me: round(me, 3),
+    mae: round(mae, 3),
+    rmse: round(rmse, 3)
+  };
+}
+
+function round(num, decimals) {
+  const factor = Math.pow(10, decimals);
+  return Math.round(num * factor) / factor;
+}
+
+const currentYear = dayjs().year();
+export const yearlyObservations = generateObservations(dayjs(`${currentYear}-01-01`), 365);
+export const yearlyForecasts = generateForecasts(dayjs(`${currentYear}-01-01`), 365);
+
+export const mockObservations = filterDataByDateRange(
+  yearlyObservations,
+  dayjs().subtract(30, 'day').format('YYYY-MM-DD'),
+  dayjs().format('YYYY-MM-DD')
+);
+export const mockForecasts = filterDataByDateRange(
+  yearlyForecasts,
+  dayjs().subtract(30, 'day').format('YYYY-MM-DD'),
+  dayjs().format('YYYY-MM-DD')
+);

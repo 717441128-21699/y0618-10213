@@ -6,7 +6,7 @@ import {
   DashboardOutlined
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
-import { useOutletContext } from 'react-router-dom';
+import { useData } from '../context/DataContext.jsx';
 import {
   calculateErrors,
   calculateStatistics,
@@ -17,8 +17,9 @@ import {
 import { ELEMENTS } from '../data/stations.js';
 
 export default function Dashboard() {
-  const data = useOutletContext();
-  const { observations, forecasts } = data;
+  const { recentObservations, recentForecasts } = useData();
+  const observations = recentObservations;
+  const forecasts = recentForecasts;
 
   const tempErrors = useMemo(() =>
     calculateErrors(forecasts, observations, 'temperature'),

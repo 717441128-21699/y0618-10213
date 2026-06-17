@@ -179,3 +179,39 @@ body {
 .leaflet-container {
   font-family: inherit;
 }
+
+.station-detail-modal .stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.station-detail-modal .stat-row:last-child {
+  border-bottom: none;
+}
+
+.station-detail-modal .stat-row strong {
+  color: #1890ff;
+}
+
+.station-detail-modal .ant-modal-body {
+  padding-top: 16px;
+}
+
+.ant-upload-drag-icon {
+  margin-bottom: 8px;
+}
+
+.ant-upload-hint {
+  font-size: 12px;
+  color: #999;
+}
+
+.archive-filter-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}

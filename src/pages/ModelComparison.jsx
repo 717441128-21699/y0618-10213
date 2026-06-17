@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Card, Select, Row, Col, Radio, Space, Table, Tag, Tabs } from 'antd';
 import ReactECharts from 'echarts-for-react';
-import { useOutletContext } from 'react-router-dom';
+import { useData } from '../context/DataContext.jsx';
 import _ from 'lodash';
 import {
   calculateErrors,
@@ -13,8 +13,7 @@ import {
 import { ELEMENTS, MODELS, SEASONS, WEATHER_TYPES } from '../data/stations.js';
 
 export default function ModelComparison() {
-  const data = useOutletContext();
-  const { observations, forecasts } = data;
+  const { observations, forecasts } = useData();
 
   const [element, setElement] = useState('temperature');
   const [metric, setMetric] = useState('rmse');

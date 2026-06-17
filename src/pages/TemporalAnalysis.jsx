@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Card, Select, Row, Col, Radio, Space, Table, Tag } from 'antd';
 import ReactECharts from 'echarts-for-react';
-import { useOutletContext } from 'react-router-dom';
+import { useData } from '../context/DataContext.jsx';
 import {
   calculateErrors,
   groupByForecastHour,
@@ -11,8 +11,7 @@ import {
 import { ELEMENTS, MODELS, STATIONS, SEASONS } from '../data/stations.js';
 
 export default function TemporalAnalysis() {
-  const data = useOutletContext();
-  const { observations, forecasts } = data;
+  const { observations, forecasts } = useData();
 
   const [element, setElement] = useState('temperature');
   const [metric, setMetric] = useState('rmse');

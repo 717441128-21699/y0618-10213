@@ -1,13 +1,17 @@
 import React, { useState } from 'react';
-import { Layout, Menu, theme } from 'antd';
+import { Layout, Menu, theme, Button, Tag, Modal } from 'antd';
 import {
   DashboardOutlined,
   EnvironmentOutlined,
   LineChartOutlined,
   BarChartOutlined,
-  DatabaseOutlined
+  DatabaseOutlined,
+  UploadOutlined,
+  ReloadOutlined
 } from '@ant-design/icons';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { useData } from '../../context/DataContext.jsx';
+import DataImportModal from '../DataImport/DataImportModal.jsx';
 import './MainLayout.css';
 
 const { Header, Sider, Content } = Layout;
@@ -20,10 +24,12 @@ const menuItems = [
   { key: '/archive', icon: <DatabaseOutlined />, label: '数据归档' }
 ];
 
-export default function MainLayout({ data }) {
+export default function MainLayout() {
   const [collapsed, setCollapsed] = useState(false);
+  const [importModalOpen, setImportModalOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { dataSource, resetToMockData, observations, forecasts } = useData();
   const {
     token: { colorBgContainer, borderRadiusLG },
   } = theme.useToken();
@@ -35,6 +41,11 @@ export default function MainLayout({ data }) {
   const getSelectedKey = () => {
     if (location.pathname === '/') return '/';
     return '/' + location.pathname.split('/')[1];
+  };
+
+  const dataCount = {
+    observations: observations.length,
+    forecasts: forecasts.length
   };
 
   return (
@@ -71,11 +82,31 @@ export default function MainLayout({ data }) {
             实时气象数据分析与预报误差评估工具
           </h2>
           <div className="header-info">
-            <span>数据时段：最近30天</span>
+            <Tag color={dataSource === 'imported' ? 'green' : 'blue'}>
+              {dataSource === 'imported' ? '已导入数据' : '模拟数据'}
+            </Tag>
             <span className="divider">|</span>
-            <span>站点数量：30个</span>
+            <span>观测：{dataCount.observations.toLocaleString()}条</span>
             <span className="divider">|</span>
-            <span>预报模式：4个</span>
+            <span>预报：{dataCount.forecasts.toLocaleString()}条</span>
+            <span className="divider">|</span>
+            <Button
+              type="primary"
+              size="small"
+              icon={<UploadOutlined />}
+              onClick={() => setImportModalOpen(true)}
+            >
+              导入数据
+            </Button>
+            {dataSource === 'imported' && (
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                onClick={resetToMockData}
+              >
+                重置
+              </Button>
+            )}
           </div>
         </Header>
         <Content
@@ -88,9 +119,13 @@ export default function MainLayout({ data }) {
             overflow: 'auto'
           }}
         >
-          <Outlet context={data} />
+          <Outlet />
         </Content>
       </Layout>
+      <DataImportModal
+        open={importModalOpen}
+        onClose={() => setImportModalOpen(false)}
+      />
     </Layout>
   );
 }

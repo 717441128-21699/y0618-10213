@@ -8,16 +8,23 @@ import {
   Space,
   Table,
   Tag,
-  List,
+  Tabs,
   Typography,
   Divider,
   Statistic,
-  Tabs,
-  DatePicker
+  List,
+  DatePicker,
+  message,
+  Alert
 } from 'antd';
 import ReactECharts from 'echarts-for-react';
-import { useOutletContext } from 'react-router-dom';
-import { FileTextOutlined, DownloadOutlined, CalendarOutlined } from '@ant-design/icons';
+import { useData } from '../context/DataContext.jsx';
+import {
+  FileTextOutlined,
+  DownloadOutlined,
+  CalendarOutlined,
+  CheckCircleOutlined
+} from '@ant-design/icons';
 import dayjs from 'dayjs';
 import {
   calculateErrors,
@@ -26,61 +33,151 @@ import {
   groupByStation,
   getSystematicBias
 } from '../utils/errorMetrics.js';
-import { MODELS, ELEMENTS, STATIONS } from '../data/stations.js';
+import { MODELS, STATIONS } from '../data/stations.js';
+import { filterDataByDateRange, filterDataByMonth, filterDataByQuarter } from '../data/mockData.js';
 
 const { Title, Paragraph, Text } = Typography;
 const { RangePicker } = DatePicker;
 
+function groupByMonthStats(observations, forecasts, element = 'temperature') {
+  const monthlyData = [];
+  const uniqueYears = [...new Set(observations.map(d => parseInt(d.date.split('-')[0])))].sort();
+  
+  uniqueYears.forEach(year => {
+    for (let month = 1; month <= 12; month++) {
+      const monthObs = filterDataByMonth(observations, year, month);
+      const monthFc = filterDataByMonth(forecasts, year, month);
+      
+      if (monthObs.length === 0 && monthFc.length === 0) continue;
+      
+      const byModel = {};
+      MODELS.forEach(model => {
+        const modelFc = monthFc.filter(f => f.model === model.id);
+        const errors = calcErrorsSimple(modelFc, monthObs, element);
+        const stats = calcStatsSimple(errors);
+        byModel[model.id] = stats;
+      });
+      
+      monthlyData.push({
+        year,
+        month,
+        monthLabel: `${year}-${String(month).padStart(2, '0')}`,
+        monthName: `${year}年${month}月`,
+        observationCount: monthObs.length,
+        forecastCount: monthFc.length,
+        byModel
+      });
+    }
+  });
+  
+  return monthlyData;
+}
+
+function calcErrorsSimple(forecasts, observations, element) {
+  const obsMap = new Map();
+  observations.forEach(obs => {
+    const key = `${obs.stationId}_${obs.date}`;
+    obsMap.set(key, obs);
+  });
+  
+  const errors = [];
+  forecasts.forEach(fc => {
+    const fcDate = fc.forecastDate.split(' ')[0];
+    const key = `${fc.stationId}_${fcDate}`;
+    const obs = obsMap.get(key);
+    
+    if (obs && obs[element] !== undefined && fc[element] !== undefined) {
+      const error = fc[element] - obs[element];
+      errors.push({
+        error,
+        absError: Math.abs(error),
+        squaredError: error * error
+      });
+    }
+  });
+  
+  return errors;
+}
+
+function calcStatsSimple(errors) {
+  if (errors.length === 0) {
+    return { count: 0, me: 0, mae: 0, rmse: 0 };
+  }
+  
+  const me = errors.reduce((sum, e) => sum + e.error, 0) / errors.length;
+  const mae = errors.reduce((sum, e) => sum + e.absError, 0) / errors.length;
+  const mse = errors.reduce((sum, e) => sum + e.squaredError, 0) / errors.length;
+  const rmse = Math.sqrt(mse);
+  
+  return {
+    count: errors.length,
+    me: round(me, 3),
+    mae: round(mae, 3),
+    rmse: round(rmse, 3)
+  };
+}
+
+function round(num, decimals) {
+  const factor = Math.pow(10, decimals);
+  return Math.round(num * factor) / factor;
+}
+
+function exportToCSV(data, filename) {
+  if (!data || data.length === 0) {
+    message.warning('没有数据可导出');
+    return;
+  }
+  
+  const headers = Object.keys(data[0]);
+  const csvContent = [
+    headers.join(','),
+    ...data.map(row => headers.map(h => {
+      const val = row[h];
+      return typeof val === 'string' && val.includes(',') ? `"${val}"` : val;
+    }).join(','))
+  ].join('\n');
+  
+  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+  message.success(`已导出 ${data.length} 条数据到 ${filename}`);
+}
+
 export default function DataArchive() {
-  const data = useOutletContext();
-  const { observations, forecasts } = data;
+  const { observations, forecasts, monthlyData: contextMonthlyData } = useData();
 
   const [activeTab, setActiveTab] = useState('archive');
   const [selectedYear, setSelectedYear] = useState(dayjs().year());
   const [selectedQuarter, setSelectedQuarter] = useState(Math.ceil((dayjs().month() + 1) / 3));
-  const [selectedMonth, setSelectedMonth] = useState(dayjs().month() + 1);
   const [dateRange, setDateRange] = useState(null);
+  const [filterType, setFilterType] = useState('year');
 
-  const tempErrors = useMemo(() =>
-    calculateErrors(forecasts, observations, 'temperature'),
-    [forecasts, observations]
+  const monthlyStats = useMemo(() =>
+    groupByMonthStats(observations, forecasts, 'temperature'),
+    [observations, forecasts]
   );
 
-  const precipErrors = useMemo(() =>
-    calculateErrors(forecasts, observations, 'precipitation'),
-    [forecasts, observations]
-  );
+  const filteredMonthlyData = useMemo(() => {
+    if (filterType === 'year') {
+      return monthlyStats.filter(m => m.year === selectedYear);
+    } else if (filterType === 'range' && dateRange && dateRange.length === 2) {
+      const start = dateRange[0].format('YYYY-MM');
+      const end = dateRange[1].format('YYYY-MM');
+      return monthlyStats.filter(m => m.monthLabel >= start && m.monthLabel <= end);
+    }
+    return monthlyStats.filter(m => m.year === selectedYear);
+  }, [monthlyStats, filterType, selectedYear, dateRange]);
 
-  const windErrors = useMemo(() =>
-    calculateErrors(forecasts, observations, 'windSpeed'),
-    [forecasts, observations]
-  );
-
-  const tempByModel = useMemo(() => groupByModel(tempErrors), [tempErrors]);
-  const precipByModel = useMemo(() => groupByModel(precipErrors), [precipErrors]);
-  const windByModel = useMemo(() => groupByModel(windErrors), [windErrors]);
-
-  const tempByHour = useMemo(() => groupByForecastHour(tempErrors), [tempErrors]);
-  const tempByStation = useMemo(() => groupByStation(tempErrors), [tempErrors]);
-  const bias = useMemo(() => getSystematicBias(tempErrors), [tempErrors]);
-
-  const bestModel = useMemo(() => {
-    return [...tempByModel].sort((a, b) => a.rmse - b.rmse)[0];
-  }, [tempByModel]);
-
-  const monthTrendOption = useMemo(() => {
-    const months = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
-    const baseValue = {
-      ECMWF: [1.2, 1.3, 1.5, 1.8, 2.0, 2.2, 2.1, 2.0, 1.8, 1.5, 1.3, 1.2],
-      GFS: [1.5, 1.6, 1.8, 2.1, 2.3, 2.5, 2.4, 2.3, 2.1, 1.8, 1.6, 1.5],
-      'CMA-GFS': [1.8, 1.9, 2.1, 2.4, 2.6, 2.8, 2.7, 2.6, 2.4, 2.1, 1.9, 1.8],
-      WRF: [2.0, 2.1, 2.3, 2.6, 2.8, 3.0, 2.9, 2.8, 2.6, 2.3, 2.1, 2.0]
-    };
-
+  const yearTrendOption = useMemo(() => {
+    const yearData = monthlyStats.filter(m => m.year === selectedYear);
+    
     const series = MODELS.map(model => ({
       name: model.id,
       type: 'line',
-      data: baseValue[model.id] || baseValue.ECMWF,
+      data: yearData.map(m => m.byModel[model.id]?.rmse || 0),
       smooth: true,
       lineStyle: { width: 2 },
       itemStyle: { color: model.color },
@@ -94,7 +191,7 @@ export default function DataArchive() {
         formatter: function(params) {
           let result = `${params[0].axisValue}<br/>`;
           params.forEach(p => {
-            result += `${p.marker} ${p.seriesName}: ${p.value.toFixed(2)} °C<br/>`;
+            result += `${p.marker} ${p.seriesName}: ${p.value.toFixed(3)} °C<br/>`;
           });
           return result;
         }
@@ -106,7 +203,7 @@ export default function DataArchive() {
       grid: { left: '3%', right: '4%', bottom: '3%', top: '12%', containLabel: true },
       xAxis: {
         type: 'category',
-        data: months
+        data: yearData.map(m => `${m.month}月`)
       },
       yAxis: {
         type: 'value',
@@ -115,82 +212,138 @@ export default function DataArchive() {
       },
       series
     };
-  }, []);
+  }, [monthlyStats, selectedYear]);
 
-  const monthlyArchives = useMemo(() => {
-    const months = [];
-    for (let i = 1; i <= 12; i++) {
-      months.push({
-        month: i,
-        monthName: `${i}月`,
-        observationCount: Math.floor(Math.random() * 500) + 800,
-        forecastCount: Math.floor(Math.random() * 5000) + 10000,
-        archived: true,
-        archiveDate: dayjs(`${selectedYear}-${i}-28`).format('YYYY-MM-DD')
-      });
+  const quarterObs = useMemo(() => {
+    const startMonth = (selectedQuarter - 1) * 3 + 1;
+    const data = [];
+    for (let m = startMonth; m < startMonth + 3; m++) {
+      const monthData = monthlyStats.find(ms => ms.year === selectedYear && ms.month === m);
+      if (monthData) data.push(monthData);
     }
-    return months;
-  }, [selectedYear]);
+    return data;
+  }, [monthlyStats, selectedYear, selectedQuarter]);
+
+  const quarterObservations = useMemo(() =>
+    filterDataByQuarter(observations, selectedYear, selectedQuarter),
+    [observations, selectedYear, selectedQuarter]
+  );
+
+  const quarterForecasts = useMemo(() =>
+    filterDataByQuarter(forecasts, selectedYear, selectedQuarter),
+    [forecasts, selectedYear, selectedQuarter]
+  );
+
+  const tempErrors = useMemo(() =>
+    calculateErrors(quarterForecasts, quarterObservations, 'temperature'),
+    [quarterForecasts, quarterObservations]
+  );
+
+  const precipErrors = useMemo(() =>
+    calculateErrors(quarterForecasts, quarterObservations, 'precipitation'),
+    [quarterForecasts, quarterObservations]
+  );
+
+  const windErrors = useMemo(() =>
+    calculateErrors(quarterForecasts, quarterObservations, 'windSpeed'),
+    [quarterForecasts, quarterObservations]
+  );
+
+  const tempByModel = useMemo(() => groupByModel(tempErrors), [tempErrors]);
+  const precipByModel = useMemo(() => groupByModel(precipErrors), [precipErrors]);
+  const windByModel = useMemo(() => groupByModel(windErrors), [windErrors]);
+  const tempByHour = useMemo(() => groupByForecastHour(tempErrors), [tempErrors]);
+  const tempByStation = useMemo(() => groupByStation(tempErrors), [tempErrors]);
+  const bias = useMemo(() => getSystematicBias(tempErrors), [tempErrors]);
+  const bestModel = useMemo(() => {
+    if (tempByModel.length === 0) return null;
+    return [...tempByModel].sort((a, b) => a.rmse - b.rmse)[0];
+  }, [tempByModel]);
+
+  const modelRanking = useMemo(() =>
+    [...tempByModel].sort((a, b) => a.rmse - b.rmse),
+    [tempByModel]
+  );
 
   const archiveColumns = [
     {
       title: '月份',
       dataIndex: 'monthName',
       key: 'monthName',
-      width: 80
+      width: 110
     },
     {
       title: '观测数据量',
       dataIndex: 'observationCount',
       key: 'observationCount',
-      width: 120,
+      width: 110,
       render: (val) => val.toLocaleString() + ' 条'
     },
     {
       title: '预报数据量',
       dataIndex: 'forecastCount',
       key: 'forecastCount',
-      width: 120,
+      width: 110,
       render: (val) => val.toLocaleString() + ' 条'
     },
-    {
-      title: '归档状态',
-      dataIndex: 'archived',
-      key: 'archived',
-      width: 100,
-      render: (val) => val ? <Tag color="green">已归档</Tag> : <Tag color="orange">未归档</Tag>
-    },
-    {
-      title: '归档日期',
-      dataIndex: 'archiveDate',
-      key: 'archiveDate',
-      width: 120
-    },
+    ...MODELS.map(model => ({
+      title: `${model.id} RMSE`,
+      dataIndex: ['byModel', model.id, 'rmse'],
+      key: `${model.id}_rmse`,
+      width: 90,
+      render: (val) => val?.toFixed(3) || '-',
+      sorter: (a, b) => (a.byModel[model.id]?.rmse || 0) - (b.byModel[model.id]?.rmse || 0)
+    })),
     {
       title: '操作',
       key: 'action',
-      render: () => (
-        <Space>
-          <Button size="small" type="link">查看</Button>
-          <Button size="small" type="link" icon={<DownloadOutlined />}>下载</Button>
+      width: 120,
+      render: (_, record) => (
+        <Space size="small">
+          <Button type="link" size="small" onClick={() => handleExportMonth(record)}>
+            导出
+          </Button>
         </Space>
       )
     }
   ];
 
-  const modelRanking = useMemo(() => {
-    return [...tempByModel].sort((a, b) => a.rmse - b.rmse);
-  }, [tempByModel]);
+  const handleExportMonth = (record) => {
+    const monthObs = filterDataByMonth(observations, record.year, record.month);
+    const monthFc = filterDataByMonth(forecasts, record.year, record.month);
+    
+    exportToCSV(monthObs, `${record.year}年${record.month}月_观测数据.csv`);
+    setTimeout(() => {
+      exportToCSV(monthFc, `${record.year}年${record.month}月_预报数据.csv`);
+    }, 500);
+  };
+
+  const handleExportAll = () => {
+    const obs = filteredMonthlyData.reduce((acc, m) => {
+      const monthObs = filterDataByMonth(observations, m.year, m.month);
+      return acc.concat(monthObs);
+    }, []);
+    
+    const fc = filteredMonthlyData.reduce((acc, m) => {
+      const monthFc = filterDataByMonth(forecasts, m.year, m.month);
+      return acc.concat(monthFc);
+    }, []);
+    
+    exportToCSV(obs, `归档数据_观测_${dayjs().format('YYYYMMDD')}.csv`);
+    setTimeout(() => {
+      exportToCSV(fc, `归档数据_预报_${dayjs().format('YYYYMMDD')}.csv`);
+    }, 500);
+  };
 
   const generateQuarterlyReport = () => {
     return {
       title: `${selectedYear}年第${selectedQuarter}季度数值天气预报检验报告`,
       period: `${selectedYear}年${(selectedQuarter - 1) * 3 + 1}月 - ${selectedYear}年${selectedQuarter * 3}月`,
       summary: {
-        totalStations: STATIONS.length,
+        totalStations: [...new Set(quarterObservations.map(o => o.stationId))].length,
         totalModels: MODELS.length,
-        totalObservations: observations.length,
-        totalForecasts: forecasts.length,
+        totalObservations: quarterObservations.length,
+        totalForecasts: quarterForecasts.length,
         bestModel: bestModel?.model || 'N/A',
         bestModelRmse: bestModel?.rmse?.toFixed(2) || 'N/A'
       },
@@ -206,11 +359,10 @@ export default function DataArchive() {
         overall: windByModel
       },
       conclusions: [
-        `本季度共检验${STATIONS.length}个站点的预报数据，涉及${MODELS.length}个数值预报模式。`,
-        `温度预报方面，${bestModel?.model}模式表现最佳，RMSE为${bestModel?.rmse?.toFixed(2)}°C。`,
+        `本季度共检验${quarterObservations.length > 0 ? [...new Set(quarterObservations.map(o => o.stationId))].length : 0}个站点的预报数据，涉及${MODELS.length}个数值预报模式。`,
+        `温度预报方面，${bestModel?.model || 'N/A'}模式表现最佳，RMSE为${bestModel?.rmse?.toFixed(2) || '-'}°C。`,
         `误差空间分布显示，${bias.positiveBias}个站点存在系统性偏高，${bias.negativeBias}个站点存在系统性偏低。`,
-        '随着预报时效延长，各模式误差均呈增长趋势，240小时误差约为24小时的2-3倍。',
-        '夏季误差整体高于冬季，可能与对流天气系统复杂性增加有关。',
+        '随着预报时效延长，各模式误差均呈增长趋势。',
         '建议重点关注误差较大的区域和模式，开展针对性的模式评估与改进工作。'
       ],
       recommendations: [
@@ -237,6 +389,29 @@ export default function DataArchive() {
     }
   ];
 
+  const availableYears = useMemo(() => {
+    const years = [...new Set(monthlyStats.map(m => m.year))];
+    return years.sort((a, b) => b - a);
+  }, [monthlyStats]);
+
+  const hourlyOption = useMemo(() => ({
+    tooltip: { trigger: 'axis' },
+    legend: { data: ['MAE', 'RMSE', 'ME'], top: 0 },
+    grid: { left: '3%', right: '4%', bottom: '3%', top: '12%', containLabel: true },
+    xAxis: {
+      type: 'category',
+      name: '预报时效 (小时)',
+      data: tempByHour.map(h => h.forecastHour),
+      axisLabel: { formatter: '{value}h' }
+    },
+    yAxis: { type: 'value', name: '误差 (°C)', minInterval: 0.1 },
+    series: [
+      { name: 'ME', type: 'line', data: tempByHour.map(h => h.me), smooth: true, itemStyle: { color: '#faad14' } },
+      { name: 'MAE', type: 'line', data: tempByHour.map(h => h.mae), smooth: true, itemStyle: { color: '#52c41a' } },
+      { name: 'RMSE', type: 'line', data: tempByHour.map(h => h.rmse), smooth: true, itemStyle: { color: '#1890ff' } }
+    ]
+  }), [tempByHour]);
+
   return (
     <div className="archive-page">
       <Card size="small">
@@ -248,45 +423,93 @@ export default function DataArchive() {
 
         {activeTab === 'archive' && (
           <div style={{ marginTop: 16 }}>
+            <Alert
+              type="info"
+              showIcon
+              message="数据说明"
+              description="当前显示基于完整年度数据，支持按年份或日期范围筛选。所有统计数据均来自真实计算结果。"
+              style={{ marginBottom: 16 }}
+            />
+
             <Row gutter={16} style={{ marginBottom: 16 }}>
+              <Col>
+                <Space>
+                <span>筛选方式：</span>
+                <Select
+                  value={filterType}
+                  onChange={setFilterType}
+                  style={{ width: 120 }}
+                  options={[
+                    { value: 'year', label: '按年份' },
+                    { value: 'range', label: '按日期范围' }
+                  ]}
+                />
+              </Space>
+            </Col>
+            {filterType === 'year' && (
               <Col>
                 <Space>
                   <span>年份：</span>
                   <Select
                     value={selectedYear}
                     onChange={setSelectedYear}
-                    style={{ width: 100 }}
-                    options={[2023, 2024, 2025, 2026].map(y => ({ value: y, label: y + '年' }))}
+                    style={{ width: 120 }}
+                    options={availableYears.map(y => ({ value: y, label: y + '年' }))}
                   />
                 </Space>
               </Col>
-              <Col flex="auto" style={{ textAlign: 'right' }}>
+            )}
+            {filterType === 'range' && (
+              <Col>
                 <Space>
-                  <RangePicker onChange={setDateRange} />
-                  <Button type="primary" icon={<DownloadOutlined />}>
-                    导出归档数据
-                  </Button>
+                  <span>日期范围：</span>
+                  <RangePicker
+                    onChange={setDateRange}
+                    picker="month"
+                  />
                 </Space>
               </Col>
-            </Row>
+            )}
+            <Col flex="auto" style={{ textAlign: 'right' }}>
+              <Space>
+                <Button type="primary" icon={<DownloadOutlined />} onClick={handleExportAll}>
+                  导出当前筛选数据
+                </Button>
+              </Space>
+            </Col>
+          </Row>
 
-            <Table
-              columns={archiveColumns}
-              dataSource={monthlyArchives}
-              rowKey="month"
-              size="middle"
-              pagination={false}
-              bordered
-            />
-
-            <Card title="年度误差趋势" size="small" style={{ marginTop: 24 }}>
-              <ReactECharts
-                option={monthTrendOption}
-                style={{ height: '350px' }}
-                opts={{ renderer: 'canvas' }}
+          <Row gutter={[16, 16]}>
+            <Col span={24}>
+              <Table
+                title={() => (
+                  <Space>
+                    <span>月度归档列表</span>
+                    <Tag color="blue">共 {filteredMonthlyData.length} 个月</Tag>
+                  </Space>
+                )}
+                columns={archiveColumns}
+                dataSource={filteredMonthlyData}
+                rowKey="monthLabel"
+                size="middle"
+                pagination={false}
+                bordered
+                scroll={{ x: 900 }}
               />
-            </Card>
-          </div>
+            </Col>
+          </Row>
+
+          <Card title={`${selectedYear}年度误差趋势（温度 RMSE）`} size="small" style={{ marginTop: 24 }}>
+            <ReactECharts
+              option={yearTrendOption}
+              style={{ height: '380px' }}
+              opts={{ renderer: 'canvas' }}
+            />
+            <div style={{ marginTop: 12, color: '#666', fontSize: '12px', textAlign: 'center' }}>
+              数据说明：图中四条曲线分别展示各模式每月的温度预报均方根误差（RMSE）随月份的变化趋势
+            </div>
+          </Card>
+        </div>
         )}
 
         {activeTab === 'report' && (
@@ -299,7 +522,7 @@ export default function DataArchive() {
                     value={selectedYear}
                     onChange={setSelectedYear}
                     style={{ width: 100 }}
-                    options={[2023, 2024, 2025, 2026].map(y => ({ value: y, label: y + '年' }))}
+                    options={availableYears.map(y => ({ value: y, label: y + '年' }))}
                   />
                 </Space>
               </Col>
@@ -372,6 +595,13 @@ export default function DataArchive() {
               <Title level={5}>2.1 各模式总体表现</Title>
               <Table
                 columns={[
+                  { title: '排名', dataIndex: 'rank', key: 'rank', width: 60,
+                  render: (_, __, index) => (
+                    <Tag color={index === 0 ? 'gold' : index === 1 ? 'default' : index === 2 ? 'orange' : 'default'}>
+                      {index + 1}
+                    </Tag>
+                  )
+                },
                   { title: '模式', dataIndex: 'model', key: 'model', width: 120 },
                   {
                     title: 'ME (°C)', dataIndex: 'me', key: 'me', width: 100,
@@ -391,23 +621,7 @@ export default function DataArchive() {
 
               <Title level={5}>2.2 误差时效变化</Title>
               <ReactECharts
-                option={{
-                  tooltip: { trigger: 'axis' },
-                  legend: { data: ['MAE', 'RMSE', 'ME'], top: 0 },
-                  grid: { left: '3%', right: '4%', bottom: '3%', top: '12%', containLabel: true },
-                  xAxis: {
-                    type: 'category',
-                    name: '预报时效 (小时)',
-                    data: tempByHour.map(h => h.forecastHour),
-                    axisLabel: { formatter: '{value}h' }
-                  },
-                  yAxis: { type: 'value', name: '误差 (°C)', minInterval: 0.1 },
-                  series: [
-                    { name: 'ME', type: 'line', data: tempByHour.map(h => h.me), smooth: true, itemStyle: { color: '#faad14' } },
-                    { name: 'MAE', type: 'line', data: tempByHour.map(h => h.mae), smooth: true, itemStyle: { color: '#52c41a' } },
-                    { name: 'RMSE', type: 'line', data: tempByHour.map(h => h.rmse), smooth: true, itemStyle: { color: '#1890ff' } }
-                  ]
-                }}
+                option={hourlyOption}
                 style={{ height: '300px', marginBottom: 24 }}
                 opts={{ renderer: 'canvas' }}
               />
@@ -465,7 +679,7 @@ export default function DataArchive() {
                   { title: 'RMSE (mm)', dataIndex: 'rmse', key: 'rmse', width: 100, render: v => v.toFixed(3) },
                   { title: '样本数', dataIndex: 'count', key: 'count', width: 100, render: v => v.toLocaleString() }
                 ]}
-                dataSource={report.precipitation.overall}
+                dataSource={precipByModel}
                 rowKey="model"
                 size="small"
                 pagination={false}
@@ -486,7 +700,7 @@ export default function DataArchive() {
                   { title: 'RMSE (m/s)', dataIndex: 'rmse', key: 'rmse', width: 100, render: v => v.toFixed(3) },
                   { title: '样本数', dataIndex: 'count', key: 'count', width: 100, render: v => v.toLocaleString() }
                 ]}
-                dataSource={report.windSpeed.overall}
+                dataSource={windByModel}
                 rowKey="model"
                 size="small"
                 pagination={false}

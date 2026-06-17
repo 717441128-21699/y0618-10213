@@ -1,9 +1,11 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { Card, Select, Row, Col, Radio, Space, Table, Tag, Slider } from 'antd';
+import React, { useState, useMemo } from 'react';
+import { Card, Select, Row, Col, Radio, Space, Table, Tag, Slider, Button } from 'antd';
 import { MapContainer, TileLayer, CircleMarker, Popup } from 'react-leaflet';
-import { useOutletContext } from 'react-router-dom';
+import { EyeOutlined } from '@ant-design/icons';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
+import { useData } from '../context/DataContext.jsx';
+import StationDetailModal from '../components/StationDetail/StationDetailModal.jsx';
 import {
   calculateErrors,
   groupByStation,
@@ -39,13 +41,14 @@ function getRadius(absValue, maxAbs) {
 }
 
 export default function SpatialDistribution() {
-  const data = useOutletContext();
-  const { observations, forecasts } = data;
+  const { observations, forecasts } = useData();
 
   const [element, setElement] = useState('temperature');
   const [metric, setMetric] = useState('me');
   const [selectedModel, setSelectedModel] = useState('ECMWF');
   const [forecastHour, setForecastHour] = useState(24);
+  const [selectedStationId, setSelectedStationId] = useState(null);
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
 
   const allErrors = useMemo(() =>
     calculateErrors(forecasts, observations, element),
@@ -73,25 +76,30 @@ export default function SpatialDistribution() {
 
   const center = [35, 105];
 
+  const handleStationClick = (stationId) => {
+    setSelectedStationId(stationId);
+    setDetailModalOpen(true);
+  };
+
   const columns = [
     {
       title: '站点',
       dataIndex: 'stationName',
       key: 'stationName',
-      width: 80,
+      width: 70,
       fixed: 'left'
     },
     {
       title: '省份',
       dataIndex: 'province',
       key: 'province',
-      width: 70
+      width: 60
     },
     {
       title: 'ME',
       dataIndex: 'me',
       key: 'me',
-      width: 70,
+      width: 60,
       render: (val) => (
         <Tag color={val > 0 ? 'red' : val < 0 ? 'blue' : 'default'}>
           {val > 0 ? '+' : ''}{val.toFixed(2)}
@@ -102,25 +110,34 @@ export default function SpatialDistribution() {
       title: 'MAE',
       dataIndex: 'mae',
       key: 'mae',
-      width: 70,
+      width: 60,
       render: (val) => val.toFixed(2)
     },
     {
       title: 'RMSE',
       dataIndex: 'rmse',
       key: 'rmse',
-      width: 70,
+      width: 60,
       render: (val) => val.toFixed(2)
     },
     {
-      title: '样本数',
-      dataIndex: 'count',
-      key: 'count',
-      width: 70
+      title: '操作',
+      key: 'action',
+      width: 60,
+      render: (_, record) => (
+        <Button
+          type="link"
+          size="small"
+          icon={<EyeOutlined />}
+          onClick={() => handleStationClick(record.stationId)}
+        >
+          详情
+        </Button>
+      )
     }
   ];
 
-  const elementInfo = ELEMENTS.find(e => e.id === element) || ELEMENTS[0];
+  const elementInfo = ELEMENTS.find(e => e.key === element) || ELEMENTS[0];
 
   const legendItems = useMemo(() => {
     const items = [];
@@ -189,6 +206,9 @@ export default function SpatialDistribution() {
             </Space>
           </Col>
         </Row>
+        <div style={{ marginTop: 8, color: '#666', fontSize: '12px' }}>
+          💡 提示：点击地图上的站点圆圈或表格中的"详情"按钮，可查看站点详细检验数据
+        </div>
       </Card>
 
       <Row gutter={16}>
@@ -221,14 +241,20 @@ export default function SpatialDistribution() {
                         color: '#fff',
                         weight: 2,
                         opacity: 1,
-                        fillOpacity: 0.8
+                        fillOpacity: 0.8,
+                        cursor: 'pointer'
+                      }}
+                      eventHandlers={{
+                        click: () => handleStationClick(station.stationId)
                       }}
                     >
                       <Popup>
-                        <div>
-                          <strong>{station.stationName}</strong> ({station.province})
+                        <div style={{ cursor: 'pointer' }}>
+                          <strong style={{ fontSize: '14px' }}>{station.stationName}</strong> ({station.province})
                           <br />
-                          {metric.toUpperCase()}: {value.toFixed(2)} {elementInfo.unit}
+                          <span style={{ color: '#666', fontSize: '12px' }}>站点编号: {station.stationId}</span>
+                          <hr style={{ margin: '6px 0' }} />
+                          {metric.toUpperCase()}: <strong>{value.toFixed(2)}</strong> {elementInfo.unit}
                           <br />
                           ME: {station.me.toFixed(2)} {elementInfo.unit}
                           <br />
@@ -237,6 +263,8 @@ export default function SpatialDistribution() {
                           RMSE: {station.rmse.toFixed(2)} {elementInfo.unit}
                           <br />
                           样本数: {station.count}
+                          <hr style={{ margin: '6px 0' }} />
+                          <span style={{ color: '#1890ff', fontSize: '12px' }}>点击查看详细分析 →</span>
                         </div>
                       </Popup>
                     </CircleMarker>
@@ -265,7 +293,11 @@ export default function SpatialDistribution() {
           </Card>
         </Col>
         <Col span={8}>
-          <Card title="站点误差详情" size="small">
+          <Card
+            title="站点误差详情"
+            size="small"
+            extra={<span style={{ fontSize: '12px', color: '#666' }}>共{stationData.length}站</span>}
+          >
             <Table
               columns={columns}
               dataSource={stationData}
@@ -273,10 +305,20 @@ export default function SpatialDistribution() {
               size="small"
               scroll={{ y: 440, x: 400 }}
               pagination={false}
+              onRow={(record) => ({
+                style: { cursor: 'pointer' },
+                onClick: () => handleStationClick(record.stationId)
+              })}
             />
           </Card>
         </Col>
       </Row>
+
+      <StationDetailModal
+        stationId={selectedStationId}
+        open={detailModalOpen}
+        onClose={() => setDetailModalOpen(false)}
+      />
     </div>
   );
 }
